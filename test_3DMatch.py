@@ -312,7 +312,7 @@ if __name__ == '__main__':
     config.re_thre = 15
     config.te_thre = 30
     # TODO change the dataset path here
-    # config.root = ''
+    config.root = 'data/threedmatch_feat/'
 
 
     if args.use_icp:

@@ -18,6 +18,72 @@ from utils.timer import Timer
 
 set_seed()
 
+
+def visualize_matches(src_keypts, tgt_keypts, pred_labels, pred_trans=None, max_lines=500):
+    """Visualize correspondences between source and target keypoints using Open3D.
+
+    Accepts torch tensors (shape [1, N, 3] or [1, N]) or numpy arrays.
+    If `pred_trans` is provided (4x4 or [1,4,4]), the target points will be transformed for visualization.
+    """
+    import open3d as o3d
+    import numpy as _np
+
+    # Convert inputs to numpy
+    if isinstance(src_keypts, torch.Tensor):
+        src = src_keypts[0].detach().cpu().numpy()
+    else:
+        src = _np.asarray(src_keypts)
+    if isinstance(tgt_keypts, torch.Tensor):
+        tgt = tgt_keypts[0].detach().cpu().numpy()
+    else:
+        tgt = _np.asarray(tgt_keypts)
+    if isinstance(pred_labels, torch.Tensor):
+        labels = pred_labels[0].detach().cpu().numpy()
+    else:
+        labels = _np.asarray(pred_labels)
+
+    # Optionally apply predicted transform to target points for alignment visualization
+    if pred_trans is not None:
+        try:
+            if isinstance(pred_trans, torch.Tensor):
+                T = pred_trans[0].detach().cpu().numpy()
+            else:
+                T = _np.asarray(pred_trans)
+            if T.shape == (4, 4):
+                homo = _np.concatenate([tgt, _np.ones((tgt.shape[0], 1))], axis=1)
+                tgt = (homo @ T.T)[:, :3]
+            elif T.shape == (1, 4, 4):
+                homo = _np.concatenate([tgt, _np.ones((tgt.shape[0], 1))], axis=1)
+                tgt = (homo @ T[0].T)[:, :3]
+        except Exception:
+            # if transform fails, continue with original tgt
+            pass
+
+    pcd_src = make_point_cloud(src)
+    pcd_tgt = make_point_cloud(tgt)
+    pcd_src.paint_uniform_color([1.0, 0.7, 0.0])
+    pcd_tgt.paint_uniform_color([0.0, 0.7, 1.0])
+
+    N = min(src.shape[0], tgt.shape[0])
+    idxs = _np.arange(N)
+    if N > max_lines:
+        idxs = _np.random.choice(N, size=max_lines, replace=False)
+
+    pts = _np.vstack([src[:N], tgt[:N]])
+    lines = _np.stack([idxs, N + idxs], axis=1)
+    colors = []
+    for i in idxs:
+        try:
+            colors.append([0.0, 1.0, 0.0] if labels[i] == 1 else [1.0, 0.0, 0.0])
+        except Exception:
+            colors.append([0.6, 0.6, 0.6])
+
+    line_set = o3d.geometry.LineSet(points=o3d.utility.Vector3dVector(pts),
+                                    lines=o3d.utility.Vector2iVector(lines))
+    line_set.colors = o3d.utility.Vector3dVector(_np.array(colors))
+
+    o3d.visualization.draw_geometries([pcd_src, pcd_tgt, line_set])
+
 def eval_KITTI_per_pair(model, dloader, config, args):
     """
     Evaluate our model on KITTI testset.
@@ -138,6 +204,12 @@ def eval_KITTI_per_pair(model, dloader, config, args):
             eval_results[seq] += recall / 100.0
             eval_cnt[seq] += 1
             eval_all += recall / 100.0
+            # optional visualization per pair
+            if hasattr(args, 'vis') and args.vis and i==10:
+                try:
+                    visualize_matches(src_keypts, tgt_keypts, pred_labels, pred_trans, max_lines=500)
+                except Exception as e:
+                    logging.warning(f"Visualization failed: {e}")
             torch.cuda.empty_cache()
             
 
@@ -215,6 +287,7 @@ if __name__ == '__main__':
     parser.add_argument('--descriptor', default='fpfh', type=str, choices=['fcgf', 'fpfh'])
     parser.add_argument('--solver', default='SVD', type=str, choices=['SVD', 'RANSAC'])
     parser.add_argument('--use_icp', default=False, type=str2bool)
+    parser.add_argument('--vis', default=False, type=str2bool, help='visualize correspondences per pair')
     args = parser.parse_args()
     print(args.chosen_snapshot, args.dataset)
     if args.use_icp:
@@ -247,7 +320,7 @@ if __name__ == '__main__':
     elif args.dataset == 'KITTI_10m':
         config.inlier_threshold = 0.6
     # TODO change the dataset path here
-    # config.root = ''
+    config.root = 'data/KITTI/'
     
     config.mode = 'test'
     from models.mymodel import MethodName
